@@ -1,0 +1,51 @@
+---
+- name: Logging Setup für Linux EC2
+  hosts: all
+  gather_facts: yes
+  vars:
+    logging_path: /etc/myapp/logging.conf
+    s3_bucket: my-log-bucket
+
+  tasks:
+
+    # 1. Software-Erkennung: Container oder Baremetal
+    - name: Prüfe, ob Docker läuft
+      command: docker ps
+      register: docker_check
+      ignore_errors: yes
+
+    - name: Setze software_location Variable
+      set_fact:
+        software_location: "{{ 'container' if docker_check.rc == 0 else 'baremetal' }}"
+
+    # 2. Prüfe Logging-Konfiguration
+    - name: Prüfe, ob Logging existiert
+      stat:
+        path: "{{ logging_path }}"
+      register: logging_conf
+
+    - name: Setze logging_needed
+      set_fact:
+        logging_needed: "{{ not logging_conf.stat.exists }}"
+
+    # 3. Logging konfigurieren, falls nötig
+    - name: Logging konfigurieren
+      copy:
+        content: |
+          log_level=INFO
+          log_path=/var/log/myapp.log
+        dest: "{{ logging_path }}"
+      when: logging_needed
+
+    # 4. Logfile erstellen
+    - name: Erstelle Logfile
+      copy:
+        content: |
+          Host: {{ inventory_hostname }}
+          Software Location: {{ software_location }}
+          Logging Configured: {{ not logging_needed }}
+        dest: /tmp/logging_info.txt
+
+    # 5. Logfile zu S3 hochladen
+    - name: Lade Logfile zu S3
+      command: aws s3 cp /tmp/logging_info.txt s3://{{ s3_bucket }}/logging_info_{{ inventory_hostname }}.txt
