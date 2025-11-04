@@ -1,17 +1,17 @@
-* name: Logging Setup für Linux EC2
+- name: Logging Setup für Linux EC2
   hosts: linuxhosts
   become: yes
   gather_facts: yes
   tasks:
 
-  * name: Definiere Softwareliste
+  - name: Definiere Softwareliste
     set_fact:
     software_list:
     - nginx
     - docker
     - ssh
 
-  * name: Prüfe, ob Software läuft (Bare-metal oder Container)
+  - name: Prüfe, ob Software läuft (Bare-metal oder Container)
     shell: |
     if pgrep -x "{{ item }}" > /dev/null 2>&1; then
     echo "running"
@@ -23,7 +23,7 @@
     loop_control:
     label: "{{ item }}"
 
-  * name: Setze software_location für jede Software
+  - name: Setze software_location für jede Software
     set_fact:
     software_info: >-
     {{
@@ -32,13 +32,13 @@
     }}
     loop: "{{ software_status.results }}"
 
-  * name: Erstelle Logging-Verzeichnis
+  - name: Erstelle Logging-Verzeichnis
     file:
     path: /var/log/myapp
     state: directory
     mode: '0755'
 
-  * name: Erstelle neue Logging-Datei mit Zeitstempel
+  - name: Erstelle neue Logging-Datei mit Zeitstempel
     shell: |
     ts=$(date "+%Y%m%d_%H%M%S")
     logfile="/var/log/myapp/logging_$ts.conf"
@@ -51,7 +51,7 @@
     echo $logfile
     register: new_logfile
 
-  * name: Erstelle Logfile mit Infos für S3 (mit Datum & Uhrzeit)
+  - name: Erstelle Logfile mit Infos für S3 (mit Datum & Uhrzeit)
     shell: |
     timestamp=$(date "+%Y-%m-%d %H:%M:%S")
     infofile="/var/log/myapp/logging_info_$(date "+%Y%m%d_%H%M%S").txt"
@@ -67,6 +67,6 @@
     echo $infofile
     register: log_info_file
 
-  * name: Lade Logfile zu S3
+  - name: Lade Logfile zu S3
     shell: |
     aws s3 cp "{{ log_info_file.stdout }}" s3://ansible3testnow/ --region eu-central-1
