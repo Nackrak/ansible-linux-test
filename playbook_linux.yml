@@ -12,13 +12,31 @@
           - docker
           - ssh
 
-    - name: Prüfe, ob Software läuft (Bare-metal oder Container)
+    - name: Prüfe, ob Software baremetal/container/not running
       shell: |
-        if pgrep -x "{{ item }}" > /dev/null 2>&1; then
-          echo "running"
-        else
-          echo "stopped"
+        NAME="{{ item }}"
+        # Prüfe Bare-Metal (systemd oder Prozess)
+        if command -v systemctl >/dev/null 2>&1; then
+          if systemctl is-active --quiet "$NAME"; then
+            echo "baremetal"
+            exit 0
+          fi
         fi
+        if pgrep -f "$NAME" >/dev/null 2>&1; then
+          echo "baremetal"
+          exit 0
+        fi
+
+        # Prüfe Docker-Container (falls Docker verfügbar)
+        if command -v docker >/dev/null 2>&1; then
+          if docker ps --format '{{"{{"}}.Names{{"}}"}} {{"{{"}}.Image{{"}}"}}' | grep -i -E "\b$NAME\b" >/dev/null 2>&1; then
+            echo "container"
+            exit 0
+          fi
+        fi
+
+        # Weder Bare-Metal noch Container gefunden
+        echo "not running"
       register: software_status
       loop: "{{ software_list }}"
       loop_control:
@@ -29,7 +47,7 @@
         software_info: >-
           {{
             software_info | default({}) |
-            combine({ item.item: ('baremetal' if item.stdout == 'running' else 'container') })
+            combine({ item.item: item.stdout })
           }}
       loop: "{{ software_status.results }}"
 
