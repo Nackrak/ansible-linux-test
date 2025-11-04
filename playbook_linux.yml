@@ -8,9 +8,9 @@
     - name: Definiere Softwareliste
       set_fact:
         software_list:
-          - nginx
-          - docker
-          - ssh
+          - App1
+          - App2
+          - App3
 
     - name: Prüfe, ob Software baremetal/container/not running
       shell: |
