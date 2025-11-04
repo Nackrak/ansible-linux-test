@@ -1,51 +1,76 @@
 ---
 - name: Logging Setup für Linux EC2
-  hosts: all
+  hosts: linuxhosts
+  become: yes
   gather_facts: yes
-  vars:
-    logging_path: /etc/myapp/logging.conf
-    s3_bucket: my-log-bucket
-
   tasks:
 
-    # 1. Software-Erkennung: Container oder Baremetal
-    - name: Prüfe, ob Docker läuft
-      command: docker ps
-      register: docker_check
-      ignore_errors: yes
-
-    - name: Setze software_location Variable
+    - name: Definiere Softwareliste
       set_fact:
-        software_location: "{{ 'container' if docker_check.rc == 0 else 'baremetal' }}"
+        software_list:
+          - nginx
+          - docker
+          - ssh
 
-    # 2. Prüfe Logging-Konfiguration
+    - name: Prüfe, ob Software läuft (Bare-metal oder Container)
+      shell: |
+        if pgrep -x "{{ item }}" > /dev/null 2>&1; then
+          echo "running"
+        else
+          echo "stopped"
+        fi
+      register: software_status
+      loop: "{{ software_list }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Setze software_location für jede Software
+      set_fact:
+        software_info: >-
+          {{
+            software_info | default({}) |
+            combine({ item.item: ('baremetal' if item.stdout == 'running' else 'container') })
+          }}
+      loop: "{{ software_status.results }}"
+
     - name: Prüfe, ob Logging existiert
       stat:
-        path: "{{ logging_path }}"
-      register: logging_conf
+        path: /var/log/myapp/logging.conf
+      register: log_file
 
     - name: Setze logging_needed
       set_fact:
-        logging_needed: "{{ not logging_conf.stat.exists }}"
+        logging_needed: "{{ not log_file.stat.exists }}"
 
-    # 3. Logging konfigurieren, falls nötig
-    - name: Logging konfigurieren
-      copy:
-        content: |
-          log_level=INFO
-          log_path=/var/log/myapp.log
-        dest: "{{ logging_path }}"
+    - name: Erstelle Logging-Verzeichnis
+      file:
+        path: /var/log/myapp
+        state: directory
+        mode: '0755'
+
+    - name: Logging konfigurieren (nur wenn nötig)
+      shell: |
+        {% for sw, loc in software_info.items() %}
+        echo "software={{ sw }}" >> /var/log/myapp/logging.conf
+        echo "location={{ loc }}" >> /var/log/myapp/logging.conf
+        echo "logging_configured=yes" >> /var/log/myapp/logging.conf
+        echo "---" >> /var/log/myapp/logging.conf
+        {% endfor %}
       when: logging_needed
 
-    # 4. Logfile erstellen
-    - name: Erstelle Logfile
-      copy:
-        content: |
-          Host: {{ inventory_hostname }}
-          Software Location: {{ software_location }}
-          Logging Configured: {{ not logging_needed }}
-        dest: /tmp/logging_info.txt
+    - name: Erstelle Logfile mit Infos für S3 (mit Datum & Uhrzeit)
+      shell: |
+        timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+        {% for sw, loc in software_info.items() %}
+        {
+          echo "Timestamp: $timestamp"
+          echo "Software: {{ sw }}"
+          echo "Location: {{ loc }}"
+          echo "LoggingConfigured: yes"
+          echo "---"
+        } >> /var/log/myapp/logging_info.txt
+        {% endfor %}
 
-    # 5. Logfile zu S3 hochladen
     - name: Lade Logfile zu S3
-      command: aws s3 cp /tmp/logging_info.txt s3://{{ s3_bucket }}/logging_info_{{ inventory_hostname }}.txt
+      shell: |
+        aws s3 cp /var/log/myapp/logging_info.txt s3://ansible3testnow/logging_info_linux.txt --region eu-central-1
