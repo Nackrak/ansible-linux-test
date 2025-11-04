@@ -1,72 +1,76 @@
+---
 - name: Logging Setup für Linux EC2
   hosts: linuxhosts
   become: yes
   gather_facts: yes
   tasks:
 
-  - name: Definiere Softwareliste
-    set_fact:
-    software_list:
-    - nginx
-    - docker
-    - ssh
+    - name: Definiere Softwareliste
+      set_fact:
+        software_list:
+          - nginx
+          - docker
+          - ssh
 
-  - name: Prüfe, ob Software läuft (Bare-metal oder Container)
-    shell: |
-    if pgrep -x "{{ item }}" > /dev/null 2>&1; then
-    echo "running"
-    else
-    echo "stopped"
-    fi
-    register: software_status
-    loop: "{{ software_list }}"
-    loop_control:
-    label: "{{ item }}"
+    - name: Prüfe, ob Software läuft (Bare-metal oder Container)
+      shell: |
+        if pgrep -x "{{ item }}" > /dev/null 2>&1; then
+          echo "running"
+        else
+          echo "stopped"
+        fi
+      register: software_status
+      loop: "{{ software_list }}"
+      loop_control:
+        label: "{{ item }}"
 
-  - name: Setze software_location für jede Software
-    set_fact:
-    software_info: >-
-    {{
-    software_info | default({}) |
-    combine({ item.item: ('baremetal' if item.stdout == 'running' else 'container') })
-    }}
-    loop: "{{ software_status.results }}"
+    - name: Setze software_location für jede Software
+      set_fact:
+        software_info: >-
+          {{
+            software_info | default({}) |
+            combine({ item.item: ('baremetal' if item.stdout == 'running' else 'container') })
+          }}
+      loop: "{{ software_status.results }}"
 
-  - name: Erstelle Logging-Verzeichnis
-    file:
-    path: /var/log/myapp
-    state: directory
-    mode: '0755'
+    - name: Prüfe, ob Logging existiert
+      stat:
+        path: /var/log/myapp/logging.conf
+      register: log_file
 
-  - name: Erstelle neue Logging-Datei mit Zeitstempel
-    shell: |
-    ts=$(date "+%Y%m%d_%H%M%S")
-    logfile="/var/log/myapp/logging_$ts.conf"
-    {% for sw, loc in software_info.items() %}
-    echo "software={{ sw }}" >> $logfile
-    echo "location={{ loc }}" >> $logfile
-    echo "logging_configured=yes" >> $logfile
-    echo "---" >> $logfile
-    {% endfor %}
-    echo $logfile
-    register: new_logfile
+    - name: Setze logging_needed
+      set_fact:
+        logging_needed: "{{ not log_file.stat.exists }}"
 
-  - name: Erstelle Logfile mit Infos für S3 (mit Datum & Uhrzeit)
-    shell: |
-    timestamp=$(date "+%Y-%m-%d %H:%M:%S")
-    infofile="/var/log/myapp/logging_info_$(date "+%Y%m%d_%H%M%S").txt"
-    {% for sw, loc in software_info.items() %}
-    {
-    echo "Timestamp: $timestamp"
-    echo "Software: {{ sw }}"
-    echo "Location: {{ loc }}"
-    echo "LoggingConfigured: yes"
-    echo "---"
-    } >> $infofile
-    {% endfor %}
-    echo $infofile
-    register: log_info_file
+    - name: Erstelle Logging-Verzeichnis
+      file:
+        path: /var/log/myapp
+        state: directory
+        mode: '0755'
 
-  - name: Lade Logfile zu S3
-    shell: |
-    aws s3 cp "{{ log_info_file.stdout }}" s3://ansible3testnow/ --region eu-central-1
+    - name: Logging konfigurieren (nur wenn nötig)
+      shell: |
+        {% for sw, loc in software_info.items() %}
+        echo "software={{ sw }}" >> /var/log/myapp/logging.conf
+        echo "location={{ loc }}" >> /var/log/myapp/logging.conf
+        echo "logging_configured=yes" >> /var/log/myapp/logging.conf
+        echo "---" >> /var/log/myapp/logging.conf
+        {% endfor %}
+      when: logging_needed
+
+    - name: Erstelle Logfile mit Infos für S3 (mit Datum & Uhrzeit)
+      shell: |
+        timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+        {% for sw, loc in software_info.items() %}
+        {
+          echo "Timestamp: $timestamp"
+          echo "Software: {{ sw }}"
+          echo "Location: {{ loc }}"
+          echo "LoggingConfigured: yes"
+          echo "---"
+        } >> /var/log/myapp/logging_info.txt
+        {% endfor %}
+
+    - name: Lade Logfile zu S3
+      shell: |
+        aws s3 cp /var/log/myapp/logging_info.txt s3://ansible3testnow/logging_info_linux.txt --region eu-central-1
